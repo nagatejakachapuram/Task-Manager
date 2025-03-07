@@ -5,39 +5,35 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 
 /**
  * @title TaskManager
- * @author Kachapuram Nagateja.
- * @dev A contract to manage tasks, allowing the owner to create, update, mark as completed, and delete tasks.
+ * @author Kachapuram Nagateja
+ * @notice A contract for managing tasks, allowing the owner to create, update, mark as completed, and delete tasks.
+ * @dev Optimized for gas efficiency, utilizing `calldata`, `unchecked` arithmetic, and storage access optimizations.
  */
 contract TaskManager is Ownable {
     /// @notice Total number of tasks created
-    uint256 public totalTaskCount;
+    uint128 public totalTaskCount;
 
-    /// @notice Emitted when a new task is created
-    /// @param taskId The ID of the newly created task
-    /// @param title The title of the task
-    /// @param description The description of the task
-    event TaskCreated(uint256 indexed taskId, string indexed title, string indexed description);
+    /// @notice Event emitted when a new task is created
+    event TaskCreated(uint256 indexed taskId, string Title, string Description);
 
-    /// @notice Emitted when a task is updated
-    /// @param taskId The ID of the task being updated
-    /// @param title The updated title of the task
-    /// @param description The updated description of the task
-    /// @param status The updated status of the task (true = completed, false = not completed)
-    event TaskUpdated(uint256 indexed taskId, string indexed title, string indexed description, bool status);
+    /// @notice Event emitted when a task is updated
+    event TaskUpdated(uint256 indexed taskId, string Title, string Description, bool Status);
 
-    /// @notice Emitted when a task is deleted
-    /// @param taskId The ID of the deleted task
+    /// @notice Event emitted when a task is deleted
     event TaskDeleted(uint256 indexed taskId);
 
     /// @notice Structure representing a task
     struct Task {
-        string Title; // Task title
-        string Description; // Task description
-        bool Status; // Task status (true = completed, false = not completed)
+        string Title;
+        string Description;
+        bool Status;
     }
 
-    /// @notice Mapping to store tasks by their ID
-    mapping(uint256 taskId => Task) public Tasks;
+    /// @notice Mapping of task ID to Task structure
+    mapping(uint256 taskId => Task) public tasks;
+
+    /// @notice Mapping to track if a task exists
+    mapping(uint256 => bool) private taskExists;
 
     /**
      * @dev Initializes the contract with an initial owner.
@@ -51,26 +47,35 @@ contract TaskManager is Ownable {
      * @param _title The title of the task.
      * @param _description The description of the task.
      */
-    function createTask(string memory _title, string memory _description) external onlyOwner {
-        totalTaskCount++;
-        Tasks[totalTaskCount] = Task(_title, _description, false);
+    function createTask(string calldata _title, string calldata _description) external onlyOwner {
+        unchecked {
+            totalTaskCount++;
+        }
+        tasks[totalTaskCount] = Task(_title, _description, false);
+        taskExists[totalTaskCount] = true;
+
         emit TaskCreated(totalTaskCount, _title, _description);
     }
 
     /**
      * @notice Updates an existing task with new details.
-     * @dev Only the contract owner can update tasks.
+     * @dev Only the contract owner can update tasks. Uses storage optimization.
      * @param _taskId The ID of the task to update.
      * @param _title The new title of the task.
      * @param _description The new description of the task.
      * @param _status The updated status of the task (true = completed, false = not completed).
      */
-    function markTask(uint256 _taskId, string memory _title, string memory _description, bool _status)
+    function updateTask(uint256 _taskId, string calldata _title, string calldata _description, bool _status)
         external
         onlyOwner
     {
-        require(_taskId > 0 && _taskId <= totalTaskCount, "Invalid task ID");
-        Tasks[_taskId] = Task(_title, _description, _status);
+        require(taskExists[_taskId], "Task does not exist");
+
+        Task storage task = tasks[_taskId];
+        task.Title = _title;
+        task.Description = _description;
+        task.Status = _status;
+
         emit TaskUpdated(_taskId, _title, _description, _status);
     }
 
@@ -80,36 +85,66 @@ contract TaskManager is Ownable {
      * @param _taskId The ID of the task to mark as completed.
      */
     function markTaskAsCompleted(uint256 _taskId) external onlyOwner {
-        require(_taskId > 0 && _taskId <= totalTaskCount, "Invalid task ID");
-        require(!Tasks[_taskId].Status, "Task is already completed");
+        require(taskExists[_taskId], "Task does not exist");
 
-        Tasks[_taskId].Status = true;
-        emit TaskUpdated(_taskId, Tasks[_taskId].Title, Tasks[_taskId].Description, true);
+        Task storage task = tasks[_taskId];
+        require(!task.Status, "Task is already completed");
+
+        task.Status = true;
+        emit TaskUpdated(_taskId, task.Title, task.Description, true);
     }
 
     /**
      * @notice Deletes a task.
-     * @dev Only the contract owner can delete tasks.
+     * @dev Only the contract owner can delete tasks. Marks them as non-existent.
      * @param _taskId The ID of the task to delete.
      */
     function deleteTask(uint256 _taskId) external onlyOwner {
-        require(_taskId > 0 && _taskId <= totalTaskCount, "Invalid task ID");
-        totalTaskCount--;
-        delete Tasks[_taskId];
+        require(taskExists[_taskId], "Task does not exist");
+
+        delete tasks[_taskId];
+        delete taskExists[_taskId];
+
         emit TaskDeleted(_taskId);
     }
 
     /**
-     * @notice Retrieves all tasks.
-     * @dev Returns an array of all tasks stored in the contract.
-     * @return An array of Task structures.
+     * @notice Retrieves a specific task by ID.
+     * @dev Returns the task details if it exists.
+     * @param _taskId The ID of the task to retrieve.
+     * @return The Task struct containing the task details.
+     */
+    function getTask(uint256 _taskId) external view returns (Task memory) {
+        require(taskExists[_taskId], "Task does not exist");
+        return tasks[_taskId];
+    }
+
+    /**
+     * @notice Retrieves all active tasks.
+     * @dev Uses optimized storage iteration and dynamic array resizing.
+     * @return An array of all existing tasks.
      */
     function getAllTasks() external view returns (Task[] memory) {
         Task[] memory allTasks = new Task[](totalTaskCount);
+        uint256 index;
 
-        for (uint256 i = 1; i <= totalTaskCount; i++) {
-            allTasks[i - 1] = Tasks[i];
+        for (uint256 i = 1; i <= totalTaskCount;) {
+            if (taskExists[i]) {
+                allTasks[index] = tasks[i];
+                unchecked {
+                    index++;
+                }
+            }
+            unchecked {
+                i++;
+            }
         }
+
+        // Reduce array size dynamically
+        assembly {
+            mstore(allTasks, index)
+        }
+
         return allTasks;
     }
 }
